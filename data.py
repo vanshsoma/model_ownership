@@ -1,5 +1,5 @@
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 # Authorized domain = CIFAR-10, restricted domain = SVHN.
 # Both are 32x32x3 with 10 classes, so no input/output reshaping is needed and
@@ -24,12 +24,18 @@ def cifar10_loaders(root="./data", batch_size=128, num_workers=2):
             DataLoader(test, batch_size=256, shuffle=False, num_workers=num_workers))
 
 
-def svhn_loaders(root="./data", batch_size=128, num_workers=2):
+def svhn_loaders(root="./data", batch_size=128, num_workers=2, limit=None):
     tf = _tf()
     train = datasets.SVHN(root, split="train", download=True, transform=tf)
     test = datasets.SVHN(root, split="test", download=True, transform=tf)
+    if limit is not None:
+        # Few-shot regime: the attacker only has `limit` restricted-domain
+        # samples. This is where non-fine-tunability actually matters — with the
+        # full dataset, training from scratch already succeeds (~0.91 on SVHN),
+        # so there is almost no transfer advantage left to protect.
+        train = Subset(train, list(range(min(limit, len(train)))))
     return (DataLoader(train, batch_size=batch_size, shuffle=True,
-                       num_workers=num_workers, drop_last=True),
+                       num_workers=num_workers, drop_last=(limit is None)),
             DataLoader(test, batch_size=256, shuffle=False, num_workers=num_workers))
 
 

@@ -20,8 +20,8 @@ def kl_to_uniform(logits):
     return (p * (log_p + math.log(C))).sum(dim=1).mean()
 
 
-def fts_step(backbone, rest_stream, device, K=5, inner_lr=0.01,
-             meta_lr=1e-3, clip=10.0):
+def fts_step(backbone, rest_stream, device, K=30, inner_lr=0.01,
+             meta_lr=5e-3, clip=10.0):
     """Fine-Tuning Suppression, first-order MAML (FOMAML).
 
     1. Clone the backbone and attach a FRESH head  -> simulated attacker.
@@ -48,9 +48,14 @@ def fts_step(backbone, rest_stream, device, K=5, inner_lr=0.01,
         inner_opt.step()
 
     # (3) suppression objective at the adapted point
-    x, _ = next(rest_stream)
-    x = x.to(device)
-    l_sup = kl_to_uniform(fast_head(fast_bb(x)))
+    x, y = next(rest_stream)
+    x, y = x.to(device), y.to(device)
+    logits = fast_head(fast_bb(x))
+    # Diagnostic: did the *simulated* attacker actually learn SVHN in K steps?
+    # If this hovers near chance (~0.1) the inner loop is too weak to give the
+    # suppression objective any signal -> raise K.
+    adapted_acc = (logits.argmax(1) == y).float().mean().item()
+    l_sup = kl_to_uniform(logits)
     fast_bb.zero_grad(set_to_none=True)
     fast_head.zero_grad(set_to_none=True)
     l_sup.backward()
@@ -64,7 +69,7 @@ def fts_step(backbone, rest_stream, device, K=5, inner_lr=0.01,
             if clip is not None:
                 g = torch.clamp(g, -clip, clip)
             real_p -= meta_lr * g
-    return l_sup.item()
+    return l_sup.item(), adapted_acc
 
 
 def ntr_step(backbone, auth_head, auth_opt, auth_stream, device):

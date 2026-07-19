@@ -33,9 +33,9 @@ def main():
     ap.add_argument("--warmup", type=int, default=1000,
                     help="NTR-only steps first, so there is a real authorized "
                          "model to protect.")
-    ap.add_argument("--K", type=int, default=5, help="simulated attacker steps")
+    ap.add_argument("--K", type=int, default=30, help="simulated attacker steps")
     ap.add_argument("--inner_lr", type=float, default=0.01)
-    ap.add_argument("--meta_lr", type=float, default=1e-3)
+    ap.add_argument("--meta_lr", type=float, default=5e-3)
     ap.add_argument("--ntr_lr", type=float, default=0.01)
     ap.add_argument("--ntr_per_round", type=int, default=1)
     ap.add_argument("--out", default="protected.pt")
@@ -65,13 +65,14 @@ def main():
 
     print("Alternating FTS / NTR...")
     for r in range(args.rounds):
-        l_sup = fts_step(backbone, rest_stream, device,
-                         K=args.K, inner_lr=args.inner_lr, meta_lr=args.meta_lr)
+        l_sup, sim_acc = fts_step(backbone, rest_stream, device,
+                                  K=args.K, inner_lr=args.inner_lr, meta_lr=args.meta_lr)
         for _ in range(args.ntr_per_round):
             ntr_step(backbone, auth_head, auth_opt, auth_stream, device)
         if (r + 1) % 100 == 0:
             acc = accuracy(backbone, auth_head, auth_test, device, 20)
-            print(f"round {r + 1:5d} | L_sup {l_sup:.4f} | CIFAR-10 acc {acc:.3f}")
+            print(f"round {r + 1:5d} | L_sup {l_sup:.4f} | "
+                  f"sim-attacker SVHN {sim_acc:.3f} | CIFAR-10 acc {acc:.3f}")
 
     torch.save({"backbone": backbone.state_dict(),
                 "auth_head": auth_head.state_dict()}, args.out)

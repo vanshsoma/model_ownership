@@ -25,8 +25,8 @@ from model import build_backbone, Head
 from train import accuracy
 
 
-def finetune_attack(backbone, device, steps, lr, tag):
-    rest_train, rest_test = svhn_loaders()
+def finetune_attack(backbone, device, steps, lr, tag, limit=None):
+    rest_train, rest_test = svhn_loaders(limit=limit)
     rest_stream = infinite(rest_train)
     head = Head().to(device)
     opt = torch.optim.SGD(list(backbone.parameters()) + list(head.parameters()),
@@ -52,6 +52,8 @@ def main():
     ap.add_argument("--ckpt", default="protected.pt")
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--lr", type=float, default=0.01)
+    ap.add_argument("--limit", type=int, default=None,
+                    help="restrict the attacker to N SVHN samples (few-shot regime)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -63,7 +65,9 @@ def main():
     else:
         tag = "scratch"  # leave randomly initialized
 
-    final = finetune_attack(backbone, device, args.steps, args.lr, tag)
+    if args.limit is not None:
+        tag = f"{tag}|{args.limit}-shot"
+    final = finetune_attack(backbone, device, args.steps, args.lr, tag, limit=args.limit)
     print(f"FINAL SVHN acc [{tag}] after {args.steps} steps: {final:.3f}")
 
 
