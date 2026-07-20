@@ -7,13 +7,8 @@ from model import Head
 
 
 def kl_to_uniform(logits):
-    """KL(p || uniform) = log C - H(p).
-
-    Bounded below by 0 (reached when p is uniform). We MINIMIZE this as the
-    suppression target, which pushes the adapted model's predictions toward
-    uniform noise. Unlike loss-maximization it is bounded and its gradient
-    shrinks as suppression succeeds, so the meta-loop stays stable.
-    """
+    """KL(p || uniform) = log C - H(p). Minimizing it pushes predictions toward
+    uniform noise; bounded below by 0 so the meta-loop stays stable."""
     C = logits.size(1)
     log_p = F.log_softmax(logits, dim=1)
     p = log_p.exp()
@@ -22,23 +17,16 @@ def kl_to_uniform(logits):
 
 def fts_step(backbone, rest_stream, device, K=30, inner_lr=0.01,
              meta_lr=5e-3, clip=10.0):
-    """Fine-Tuning Suppression, first-order MAML (FOMAML).
-
-    1. Clone the backbone and attach a FRESH head  -> simulated attacker.
-    2. Inner loop: K steps of ordinary CE fine-tuning on restricted data
-       (exactly what the thief does).
-    3. Evaluate the suppression objective at that ADAPTED point.
-    4. Transplant the adapted-point gradients back onto the REAL backbone
-       (the first-order approximation: we skip the 2nd-order term through
-       the inner loop). This nudges the real weights so that the attacker's
-       fine-tuning trajectory lands in a useless (uniform) region.
-    """
+    """Fine-Tuning Suppression via first-order MAML."""
     fast_bb = copy.deepcopy(backbone)
-    fast_head = Head().to(device)          # fresh head => robust to attacker's head init
+    fast_head = Head().to(device)          # fresh head => robust to attacker head init
     fast_params = list(fast_bb.parameters()) + list(fast_head.parameters())
-    inner_opt = torch.optim.SGD(fast_params, lr=inner_lr)
+    # Momentum matches the REAL attacker in evaluate.py. Without it the simulated
+    # attacker converges far slower (~40% vs ~80% in the same steps), so its
+    # predictions never get confident and the suppression gradient stays weak.
+    inner_opt = torch.optim.SGD(fast_params, lr=inner_lr, momentum=0.9)
 
-    # (2) simulate the attacker minimizing CE on the restricted domain
+    # simulate the attacker minimizing CE on the restricted domain
     for _ in range(K):
         x, y = next(rest_stream)
         x, y = x.to(device), y.to(device)
@@ -47,20 +35,17 @@ def fts_step(backbone, rest_stream, device, K=30, inner_lr=0.01,
         loss.backward()
         inner_opt.step()
 
-    # (3) suppression objective at the adapted point
+    # suppression objective at the adapted point
     x, y = next(rest_stream)
     x, y = x.to(device), y.to(device)
     logits = fast_head(fast_bb(x))
-    # Diagnostic: did the *simulated* attacker actually learn SVHN in K steps?
-    # If this hovers near chance (~0.1) the inner loop is too weak to give the
-    # suppression objective any signal -> raise K.
-    adapted_acc = (logits.argmax(1) == y).float().mean().item()
+    adapted_acc = (logits.argmax(1) == y).float().mean().item()  # diagnostic
     l_sup = kl_to_uniform(logits)
     fast_bb.zero_grad(set_to_none=True)
     fast_head.zero_grad(set_to_none=True)
     l_sup.backward()
 
-    # (4) FOMAML meta-step: apply adapted-point grads to the real backbone
+    # FOMAML meta-step: apply adapted-point grads to the real backbone
     with torch.no_grad():
         for real_p, fast_p in zip(backbone.parameters(), fast_bb.parameters()):
             if fast_p.grad is None:
@@ -73,8 +58,7 @@ def fts_step(backbone, rest_stream, device, K=30, inner_lr=0.01,
 
 
 def ntr_step(backbone, auth_head, auth_opt, auth_stream, device):
-    """Normal Training Reinforcement: one ordinary CE step on the authorized
-    task, so suppression does not quietly destroy the model we ship."""
+    """Normal Training Reinforcement: one CE step on the authorized task."""
     x, y = next(auth_stream)
     x, y = x.to(device), y.to(device)
     loss = F.cross_entropy(auth_head(backbone(x)), y)
