@@ -39,6 +39,9 @@ def main():
     ap.add_argument("--ntr_lr", type=float, default=0.01)
     ap.add_argument("--ntr_per_round", type=int, default=1)
     ap.add_argument("--out", default="protected.pt")
+    ap.add_argument("--save_every", type=int, default=500,
+                    help="checkpoint every N rounds so a Colab disconnect does "
+                         "not lose the whole run")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -73,6 +76,10 @@ def main():
             acc = accuracy(backbone, auth_head, auth_test, device, 20)
             print(f"round {r + 1:5d} | L_sup {l_sup:.4f} | "
                   f"sim-attacker SVHN {sim_acc:.3f} | CIFAR-10 acc {acc:.3f}")
+        if (r + 1) % args.save_every == 0:
+            torch.save({"backbone": backbone.state_dict(),
+                        "auth_head": auth_head.state_dict()}, args.out)
+            print(f"  checkpoint -> {args.out} (round {r + 1})")
 
     torch.save({"backbone": backbone.state_dict(),
                 "auth_head": auth_head.state_dict()}, args.out)
