@@ -36,7 +36,10 @@ def fts_step(backbone, rest_stream, device, K=30, inner_lr=0.01,
     fast_bb = copy.deepcopy(backbone)
     fast_head = Head().to(device)          # fresh head => robust to attacker's head init
     fast_params = list(fast_bb.parameters()) + list(fast_head.parameters())
-    inner_opt = torch.optim.SGD(fast_params, lr=inner_lr)
+    # Momentum matches the REAL attacker in evaluate.py. Without it the simulated
+    # attacker converges far slower (~40% vs ~80% in the same steps), so its
+    # predictions never get confident and the suppression gradient stays weak.
+    inner_opt = torch.optim.SGD(fast_params, lr=inner_lr, momentum=0.9)
 
     # (2) simulate the attacker minimizing CE on the restricted domain
     for _ in range(K):

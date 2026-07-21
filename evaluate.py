@@ -20,17 +20,44 @@ import argparse
 import torch
 import torch.nn.functional as F
 
-from data import svhn_loaders, infinite
+from data import svhn_loaders, cifar10_loaders, infinite
 from model import build_backbone, Head
 from train import accuracy
 
 
-def finetune_attack(backbone, device, steps, lr, tag, limit=None):
-    rest_train, rest_test = svhn_loaders(limit=limit)
-    rest_stream = infinite(rest_train)
+def _make_opt(params, lr, optimizer):
+    """Adam is an ADAPTIVE attack: the defense only ever simulated SGD."""
+    if optimizer == "adam":
+        return torch.optim.Adam(params, lr=lr)
+    return torch.optim.SGD(params, lr=lr, momentum=0.9)
+
+
+def heal(backbone, device, steps, lr):
+    """Adaptive attack: warm the model on the AUTHORIZED domain first, dragging
+    it off the fragile suppressed point, and only then attack the restricted
+    domain. This is the classic way to defeat a fine-tuning-based defense."""
+    auth_train, _ = cifar10_loaders()
+    stream = infinite(auth_train)
     head = Head().to(device)
     opt = torch.optim.SGD(list(backbone.parameters()) + list(head.parameters()),
                           lr=lr, momentum=0.9)
+    backbone.train()
+    head.train()
+    for _ in range(steps):
+        x, y = next(stream)
+        x, y = x.to(device), y.to(device)
+        loss = F.cross_entropy(head(backbone(x)), y)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return backbone
+
+
+def finetune_attack(backbone, device, steps, lr, tag, limit=None, optimizer="sgd"):
+    rest_train, rest_test = svhn_loaders(limit=limit)
+    rest_stream = infinite(rest_train)
+    head = Head().to(device)
+    opt = _make_opt(list(backbone.parameters()) + list(head.parameters()), lr, optimizer)
     backbone.train()
     head.train()
     for s in range(steps):
@@ -54,6 +81,11 @@ def main():
     ap.add_argument("--lr", type=float, default=0.01)
     ap.add_argument("--limit", type=int, default=None,
                     help="restrict the attacker to N SVHN samples (few-shot regime)")
+    ap.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd",
+                    help="adaptive attack: the defense only simulated SGD")
+    ap.add_argument("--heal", type=int, default=0,
+                    help="adaptive attack: N warm-up steps on CIFAR-10 before "
+                         "attacking, to escape the suppressed point")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -67,7 +99,13 @@ def main():
 
     if args.limit is not None:
         tag = f"{tag}|{args.limit}-shot"
-    final = finetune_attack(backbone, device, args.steps, args.lr, tag, limit=args.limit)
+    if args.heal:
+        tag = f"{tag}|heal{args.heal}"
+        heal(backbone, device, args.heal, args.lr)
+    if args.optimizer != "sgd":
+        tag = f"{tag}|{args.optimizer}"
+    final = finetune_attack(backbone, device, args.steps, args.lr, tag,
+                            limit=args.limit, optimizer=args.optimizer)
     print(f"FINAL SVHN acc [{tag}] after {args.steps} steps: {final:.3f}")
 
 
