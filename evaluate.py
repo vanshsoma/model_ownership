@@ -20,7 +20,7 @@ import argparse
 import torch
 import torch.nn.functional as F
 
-from data import svhn_loaders, cifar10_loaders, infinite
+from data import domain_loaders, cifar10_loaders, infinite
 from model import build_backbone, Head
 from train import accuracy
 
@@ -53,8 +53,9 @@ def heal(backbone, device, steps, lr):
     return backbone
 
 
-def finetune_attack(backbone, device, steps, lr, tag, limit=None, optimizer="sgd"):
-    rest_train, rest_test = svhn_loaders(limit=limit)
+def finetune_attack(backbone, device, steps, lr, tag, limit=None, optimizer="sgd",
+                    domain="svhn"):
+    rest_train, rest_test = domain_loaders(domain, limit=limit)
     rest_stream = infinite(rest_train)
     head = Head().to(device)
     opt = _make_opt(list(backbone.parameters()) + list(head.parameters()), lr, optimizer)
@@ -69,7 +70,7 @@ def finetune_attack(backbone, device, steps, lr, tag, limit=None, optimizer="sgd
         opt.step()
         if (s + 1) % 100 == 0:
             acc = accuracy(backbone, head, rest_test, device, 20)
-            print(f"[{tag}] step {s + 1:5d} | SVHN acc {acc:.3f}")
+            print(f"[{tag}] step {s + 1:5d} | acc {acc:.3f}")
     return accuracy(backbone, head, rest_test, device)
 
 
@@ -80,7 +81,10 @@ def main():
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--lr", type=float, default=0.01)
     ap.add_argument("--limit", type=int, default=None,
-                    help="restrict the attacker to N SVHN samples (few-shot regime)")
+                    help="restrict the attacker to N samples (few-shot regime)")
+    ap.add_argument("--domain", default="svhn",
+                    help="restricted domain to attack; use a HELD-OUT domain "
+                         "(e.g. kmnist) to test unseen-domain generalization")
     ap.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd",
                     help="adaptive attack: the defense only simulated SGD")
     ap.add_argument("--heal", type=int, default=0,
@@ -97,6 +101,7 @@ def main():
     else:
         tag = "scratch"  # leave randomly initialized
 
+    tag = f"{tag}|{args.domain}"
     if args.limit is not None:
         tag = f"{tag}|{args.limit}-shot"
     if args.heal:
@@ -105,7 +110,7 @@ def main():
     if args.optimizer != "sgd":
         tag = f"{tag}|{args.optimizer}"
     final = finetune_attack(backbone, device, args.steps, args.lr, tag,
-                            limit=args.limit, optimizer=args.optimizer)
+                            limit=args.limit, optimizer=args.optimizer, domain=args.domain)
     print(f"FINAL SVHN acc [{tag}] after {args.steps} steps: {final:.3f}")
 
 

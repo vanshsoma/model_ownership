@@ -1,7 +1,8 @@
 import argparse
+import random
 import torch
 
-from data import cifar10_loaders, svhn_loaders, infinite
+from data import cifar10_loaders, domain_loaders, infinite
 from model import build_backbone, Head
 from sophon import fts_step, ntr_step
 
@@ -42,6 +43,11 @@ def main():
     ap.add_argument("--save_every", type=int, default=500,
                     help="checkpoint every N rounds so a Colab disconnect does "
                          "not lose the whole run")
+    ap.add_argument("--restricted", default="svhn",
+                    help="comma-separated restricted-domain BASKET to suppress, "
+                         "e.g. svhn,mnist,fashion. Train on these; test "
+                         "generalization on a HELD-OUT domain via "
+                         "evaluate.py --domain <unseen>.")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -52,9 +58,11 @@ def main():
 
     _, auth_test = cifar10_loaders()
     auth_train, _ = cifar10_loaders()
-    rest_train, _ = svhn_loaders()
     auth_stream = infinite(auth_train)
-    rest_stream = infinite(rest_train)
+
+    restricted = [d.strip() for d in args.restricted.split(",")]
+    rest_streams = [infinite(domain_loaders(d)[0]) for d in restricted]
+    print(f"restricted basket: {restricted}")
 
     auth_opt = torch.optim.SGD(
         list(backbone.parameters()) + list(auth_head.parameters()),
@@ -68,14 +76,15 @@ def main():
 
     print("Alternating FTS / NTR...")
     for r in range(args.rounds):
-        l_sup, sim_acc = fts_step(backbone, rest_stream, device,
+        i = random.randrange(len(restricted))
+        l_sup, sim_acc = fts_step(backbone, rest_streams[i], device,
                                   K=args.K, inner_lr=args.inner_lr, meta_lr=args.meta_lr)
         for _ in range(args.ntr_per_round):
             ntr_step(backbone, auth_head, auth_opt, auth_stream, device)
         if (r + 1) % 100 == 0:
             acc = accuracy(backbone, auth_head, auth_test, device, 20)
-            print(f"round {r + 1:5d} | L_sup {l_sup:.4f} | "
-                  f"sim-attacker SVHN {sim_acc:.3f} | CIFAR-10 acc {acc:.3f}")
+            print(f"round {r + 1:5d} | dom {restricted[i]:8s} | L_sup {l_sup:.4f} | "
+                  f"sim-attacker {sim_acc:.3f} | CIFAR-10 acc {acc:.3f}")
         if (r + 1) % args.save_every == 0:
             torch.save({"backbone": backbone.state_dict(),
                         "auth_head": auth_head.state_dict()}, args.out)
